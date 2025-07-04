@@ -70,6 +70,35 @@ To install all dependencies and get the project running:
 pip install -r requirements.txt
 ```
 
+In addition, the following conditions and configurations are required:
+
+- **Running Redis server**  
+  An active Redis server is essential for the proper functioning of certain modules in the project.
+
+- **`.env` configuration file**  
+  A `.env` file must be created containing the following environment variables, required for interacting with Cloudflare R2:
+
+  - `ACCOUNT_ID`: Cloudflare account identifier.  
+  - `R2_ACCESS_KEY`: Cloudflare R2 access key.  
+  - `R2_SECRET_KEY`: Cloudflare R2 secret key.  
+  - `R2_BUCKET`: Name of the R2 bucket, which must be set to public.  
+  - `PUB_URL`: Public URL of the R2 bucket.  
+
+- **Ollama server (for the open-source version)**  
+  If using the open-source version of the system, an active Ollama server is required, and the `llama3:8b` model must be downloaded.
+
+- **OpenAI API (optional)**  
+  If you prefer to use the OpenAI API, the API key must be added to your shell environment. This can be done by adding the following line to your `~/.bashrc` file:
+
+  ```bash
+  export OPENAI_API_KEY=your_openai_api_key_here
+  ```
+
+To validate the constraints against specific RDF data, the file `ES.zip_combined-new.nq` is used.  
+This file is **not included** in the repository due to security and privacy reasons.  
+If you need access to it, please request it by email at:  
+📧 **adrian.martinez.balea@rai.usc.es**
+
 ## Scripts Usage
 
 ### Running the Full Experiment Pipeline
