@@ -1,146 +1,132 @@
-# For splitting
-from unstructured.partition.pdf import partition_pdf
+# For HTML splitting
+from unstructured.partition.html import partition_html
 
-# For summarizing
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
+# For summarization
+from langchain_ollama import ChatOllama
 from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
+from prompts import load_prompt_from_json
 
 # For embedding
 import uuid
 from langchain_chroma import Chroma
-from langchain.storage import InMemoryStore
+from langchain_community.storage.redis import RedisStore
+
 from langchain.schema.document import Document
 from langchain_openai import OpenAIEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.retrievers.multi_vector import MultiVectorRetriever
 
-# Reference: https://docs.unstructured.io/open-source/core-functionality/chunking
-def split_pdf(file_path: str):
-    chunks = partition_pdf(
+from cloudflare import *
+
+from ollama_functions import is_model_downloaded
+
+from bs4 import BeautifulSoup
+
+import os
+import re
+import pickle
+import json
+
+
+def _extract_base64_images(html_path):
+    """
+    Extract base64-encoded images from an HTML file.
+    """
+    with open(html_path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    soup = BeautifulSoup(html, 'html.parser')
+    base64_images = []
+
+    for img in soup.find_all("img"):
+        src = img.get("src", "")
+        if src.startswith("data:image/") and "base64," in src:
+            match = re.search(r"base64,(.*)", src)
+            if match:
+                base64_images.append(match.group(1))
+
+    return base64_images
+
+
+def _split_html(file_path: str):
+    """
+    Split HTML file into text chunks, tables, and images.
+    """
+    chunks = partition_html(
         filename=file_path,
-        infer_table_structure=True,            # extract tables
-        strategy="hi_res",                     # mandatory to infer tables
-
-        extract_image_block_types=["Image"],   # Add 'Table' to list to extract image of tables
-        # image_output_dir_path=output_path,   # if None, images and tables will saved in base64
-
-        extract_image_block_to_payload=True,   # if true, will extract base64 for API usage
-
-        chunking_strategy="by_title",          # or 'basic'
-        max_characters=10000,                  # defaults to 500
-        combine_text_under_n_chars=2000,       # defaults to 0
-        new_after_n_chars=6000,
-
-        # extract_images_in_pdf=True,          # deprecated
+        skip_headers_and_footers=True
     )
 
-    # separate tables from texts
     tables = []
-    table_chunks = []
     texts = []
-    images_b64 = []
+    images = []
 
+    # Separate tables and text
     for chunk in chunks:
-        if "Table" in str(type(chunk)):
-            tables.append(chunk)
+        if "Table" in chunk.category:
+            tables.append(chunk.metadata.text_as_html)
+        else:
+            texts.append(chunk.text)
+
+    # Extract base64 images and upload them to a CDN
+    for image in _extract_base64_images(file_path):
+        url = upload_base64_image(image)
+        images.append(url)
+
+    return texts, tables, images
 
 
-        if "CompositeElement" in str(type((chunk))):
-            chunk_els = chunk.metadata.orig_elements
-            for el in chunk_els:
-                if "Image" in str(type(el)):
-                    images_b64.append(el.metadata.image_base64)
-            texts.append(chunk)
-
-        if "TableChunk" in str(type((chunk))):
-            table_chunks.append(chunk)
-
-    return texts, tables, table_chunks, images_b64
-
-
-def summarize(texts, tables, table_chunks, images):
-    prompt_text = """
-    You are an assistant tasked with summarizing tables and text.
-    Give a concise summary of the table or text.
-
-    Respond only with the summary, no additionnal comment.
-    Do not start your message by saying "Here is a summary" or anything like that.
-    Just give the summary as it is.
-
-    Table or text chunk: {element}
+def _summarize(texts, tables, images):
+    """
+    Summarize text, tables, and images using language models.
     """
 
-    prompt_table = """
-    You are an assistant tasked with summarizing tables and text.
-    Give a concise summary of the table or text.
-
-    Respond only with the summary, no additionnal comment.
-    Do not start your message by saying "Here is a summary" or anything like that.
-    Just give the summary as it is.
-
-    Table or text chunk: {element}
-    """
-
-    prompt_table_chunk = """
-    You are an assistant tasked with summarizing tables and text.
-    Give a concise summary of the table or text.
-
-    Respond only with the summary, no additionnal comment.
-    Do not start your message by saying "Here is a summary" or anything like that.
-    Just give the summary as it is.
-
-    Table or text chunk: {element}
-    """
-
-    prompt_image = """Describe the image in detail. 
-    For context, the images are part of a document from the European Union Agency for Railways, specifically of RINF (Registers of Infrastructure). 
-    If the image is a plot, be specific about graphs, such as bar plots."""
-
-
-    # Set the model
-    model = ChatGroq(temperature=0.5, model="llama-3.1-8b-instant")
-
-    # Summarize texts
-    prompt = ChatPromptTemplate.from_template(prompt_text)
-    summarize_chain = {"element": lambda x: x} | prompt | model | StrOutputParser()
-    text_summaries = summarize_chain.batch(texts, {"max_concurrency": 3})
+    # Summarize text
+    prompt_text = load_prompt_from_json("prompts/rag_prompts.json", "text_summarization")
+    batch_inputs = [{"content": text} for text in texts]
+    chain = prompt_text | model | StrOutputParser()
+    text_summaries = chain.batch(batch_inputs, {"max_concurrency": 3})
 
     # Summarize tables
-    prompt = ChatPromptTemplate.from_template(prompt_text)
-    summarize_chain = {"element": lambda x: x} | prompt | model | StrOutputParser()
-    tables_html = [table.metadata.text_as_html for table in tables]
-    table_summaries = summarize_chain.batch(tables_html, {"max_concurrency": 3})
+    prompt_table = load_prompt_from_json("prompts/rag_prompts.json", "table_summarization")
+    batch_inputs = [{"content": table} for table in tables]
+    chain = prompt_table | model | StrOutputParser()
+    table_summaries = chain.batch(batch_inputs, {"max_concurrency": 3})
 
     # Summarize images
-    messages = [
-        (
-            "user",
-            [
-                {"type": "text", "text": prompt_image},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "data:image/jpeg;base64,{image}"},
-                },
-            ],
-        )
-    ]
-
-    prompt = ChatPromptTemplate.from_messages(messages)
-    chain = prompt | ChatOpenAI(model="gpt-4o-mini") | StrOutputParser()
-    image_summaries = chain.batch(images)
+    prompt_image = load_prompt_from_json("prompts/rag_prompts.json", "image_summarization")
+    batch_inputs = [{"content": image} for image in images]
+    chain = prompt_image | model | StrOutputParser()
+    image_summaries = chain.batch(batch_inputs, {"max_concurrency": 3})
 
     return text_summaries, table_summaries, image_summaries
 
 
-def embedding(texts, text_summaries, tables, table_summaries, images, image_summaries):
-    # Chroma will store vectors and support vector-based similarity search.
-    vectorstore = Chroma(collection_name="text2shacl", embedding_function=OpenAIEmbeddings())
+def _embedding(texts, text_summaries, tables, table_summaries, images, image_summaries, chroma_index):
+    """
+    Generate and store embeddings in a Chroma vector store and Redis doc store.
+    """
 
-    # Documents are stored temporarily in memory, not persistently.
-    store = InMemoryStore()
+    # Choose the embedding function depending on the model
+    if isinstance(model, ChatOpenAI):
+        embedding_function = OpenAIEmbeddings()
+    else:
+        embedding_function = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
 
-    # The key used to uniquely identify each document in the docstore.
+    filename = os.path.basename(chroma_index)
+
+    # Create persistent Chroma vector store
+    vectorstore = Chroma(
+        collection_name=filename,
+        embedding_function=embedding_function,
+        persist_directory=chroma_index
+    )
+
+    # Redis for storing full documents
+    store = RedisStore(redis_url="redis://localhost:6379")
     id_key = "doc_id"
 
     retriever = MultiVectorRetriever(
@@ -149,8 +135,8 @@ def embedding(texts, text_summaries, tables, table_summaries, images, image_summ
         id_key=id_key,
     )
 
-    # Add texts
-    if len(text_summaries)>0:
+    # Store summarized texts
+    if len(text_summaries) > 0:
         doc_ids = [str(uuid.uuid4()) for _ in texts]
         summary_texts = [
             Document(page_content=summary, metadata={id_key: doc_ids[i]}) for i, summary in enumerate(text_summaries)
@@ -158,8 +144,8 @@ def embedding(texts, text_summaries, tables, table_summaries, images, image_summ
         retriever.vectorstore.add_documents(summary_texts)
         retriever.docstore.mset(list(zip(doc_ids, texts)))
 
-    # Add tables
-    if len(table_summaries)>0:
+    # Store summarized tables
+    if len(table_summaries) > 0:
         table_ids = [str(uuid.uuid4()) for _ in tables]
         summary_tables = [
             Document(page_content=summary, metadata={id_key: table_ids[i]}) for i, summary in enumerate(table_summaries)
@@ -167,8 +153,8 @@ def embedding(texts, text_summaries, tables, table_summaries, images, image_summ
         retriever.vectorstore.add_documents(summary_tables)
         retriever.docstore.mset(list(zip(table_ids, tables)))
 
-    # Add image summaries
-    if len(image_summaries)>0:
+    # Store summarized images
+    if len(image_summaries) > 0:
         img_ids = [str(uuid.uuid4()) for _ in images]
         summary_img = [
             Document(page_content=summary, metadata={id_key: img_ids[i]}) for i, summary in enumerate(image_summaries)
@@ -178,3 +164,100 @@ def embedding(texts, text_summaries, tables, table_summaries, images, image_summ
 
     return retriever
 
+
+def _save_cache(file_path, texts, tables, images, text_summaries, table_summaries, image_summaries):
+    """
+    Save processing results to disk (pickle).
+    """
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, "wb") as f:
+        pickle.dump((texts, tables, images, text_summaries, table_summaries, image_summaries), f)
+
+
+def _load_cache(file_path):
+    """
+    Load processing results from disk (pickle).
+    """
+    with open(file_path, "rb") as f:
+        return pickle.load(f)
+
+
+def _clear_cache(file_path):
+    """
+    Delete the cache file if it exists.
+    """
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
+
+def load_retriever(file, model_name, model_temperature, force_process):
+    """
+    Main entry point: processes or loads a document retriever from HTML input.
+    """
+
+    global account_id
+    global bucket_name
+    global model
+
+    # Standardize filename for storage
+    filename = os.path.splitext(os.path.basename(file))[0]
+    filename = re.sub(r'[^a-z0-9-]', '-', filename.lower())
+
+    # Load or create a language model
+    if model_name == "gpt":
+        model = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=model_temperature
+        )
+    else:
+        if is_model_downloaded("llama3:8b"):
+            model = ChatOllama(
+                model="llama3:8b",
+                temperature=model_temperature
+            )
+        else:
+            raise ValueError("The model 'llama3:8b' is not downloaded in Ollama.")
+
+    # Initialize Cloudflare bucket credentials
+    start_cloudflare()
+    account_id, bucket_name = get_cloudflare_data()
+
+    # Prepare cache and chroma vector store paths
+    cache_file = f"processing_cache/{filename}_{model_name}_{model_temperature:.2f}.pkl"
+    chroma_index = f"./chroma_db/{filename}_{model_name}_{model_temperature:.2f}"
+
+    # Check cache
+    if not force_process and os.path.exists(cache_file) and os.path.exists(chroma_index):
+        print("📦 Loading data from cache and persistent vectorstore...")
+        texts, tables, images, text_summaries, table_summaries, image_summaries = _load_cache(cache_file)
+
+        if isinstance(model, ChatOpenAI):
+            embedding_function = OpenAIEmbeddings()
+        else:
+            embedding_function = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
+
+        vectorstore = Chroma(
+            collection_name=f"{filename}_{model_name}_{model_temperature:.2f}",
+            embedding_function=embedding_function,
+            persist_directory=chroma_index
+        )
+
+        store = RedisStore(redis_url="redis://localhost:6379")
+
+        retriever = MultiVectorRetriever(
+            vectorstore=vectorstore,
+            docstore=store,
+            id_key="doc_id",
+        )
+    else:
+        print("🔄 Processing HTML...")
+        _clear_cache(cache_file)
+        texts, tables, images = _split_html(file)
+        text_summaries, table_summaries, image_summaries = _summarize(texts, tables, images)
+        _save_cache(cache_file, texts, tables, images, text_summaries, table_summaries, image_summaries)
+        retriever = _embedding(texts, text_summaries, tables, table_summaries, images, image_summaries, chroma_index)
+        print("✅ Data processed and stored.")
+
+    return retriever

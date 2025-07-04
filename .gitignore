@@ -1,6 +1,12 @@
-# Ignorar cachés de Python
+# Ignore Python cache files
 __pycache__/
 *.py[cod]
 
-# Ignorar entorno virtual
+# Ignore virtual environment
 venv/
+
+# Ignore environment variables file
+.env
+
+
+validation/data/ES.zip_combined-new.nq

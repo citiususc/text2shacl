@@ -1,0 +1,97 @@
+{
+    "evaluator_agent": [
+        { "role": "system", "content": "You are an expert evaluator in RDF graph validation using SHACL. Your task is to determine whether the current information about a class or property is sufficient to generate SHACL constraints."},
+        { "role": "user", "content": "Based on the following information from the ontology and RAG, is it enough to write SHACL restrictions for this class/property?"},
+        { "role": "user", "content": "Evaluate if the current information is sufficient. If it is, respond only with 'yes'. If not, provide a list of the entities (classes or properties) that are related to the class/property '{entity}' and are needed from the ontology to complete the SHACL restrictions."},
+        { "role": "user", "content": "The extra information must be a class or a property from the ontology. The response should be in a similar format to this example: [class_or_property_needed_from_the_ontology_1, class_or_property_needed_from_the_ontology_2, ...]. Respond with a JSON-style list of the actual URIs (not placeholders) of ontology classes or properties needed. Do not include dummy names like 'class_or_property_needed_from_the_ontology_1'"},
+        { "role": "user", "content": "Your response must be either: 'yes' — or — a list of valid ontology URIs. Do not return anything else."},
+        { "role": "user", "content": "Ontology info of important subjects:"},
+        { "role": "user", "content": "{ontology}"},
+        { "role": "user", "content": "RAG:"},
+        { "role": "user", "content": "{rag}"}
+    ],
+    "generator_agent_property": [
+        { "role": "system", "content": "You are an expert in generating SHACL restrictions for ObjectProperties and DataTypeProperties, using Ontology, RAG tables, and previous SHACL shapes. You must only generate constraints if evidence is explicit or strongly indicated." },
+
+        { "role": "system", "content": "## DECISION PROCESS" },
+        { "role": "system", "content": "1. First, check whether **any constraints** exist for the property." },
+        { "role": "system", "content": "2. The presence of a RAG table with a matching era:rinfIndex is a strong indicator (sufficient condition) that at least a PropertyShape should be generated — but not a required one." },
+        { "role": "system", "content": "3. Even if no table is present, if the RAG or the Ontology defines constraints (e.g., sh:nodeKind, sh:maxCount, sh:class, etc.), a PropertyShape should be created." },
+        { "role": "system", "content": "4. If neither RAG nor Ontology provide any constraint, return exactly: 'SHACL shapes not found'." },
+        
+        { "role": "system", "content": "5. Applicability constraints (SPARQLConstraint) should only be generated if the RAG includes rules that relate the ':applicable' status of the property to the presence or values of other properties (e.g., 'Explanation on applicability: Applicable only when..." },
+        
+        { "role": "system", "content": "## STRUCTURE" },
+        { "role": "system", "content": "6. PropertyShape must begin with: era-sh:(PropertyName) a sh:PropertyShape ;" },
+        { "role": "system", "content": "7. SPARQLConstraint (if needed) must begin with: era-sh:(PropertyName+'Applicability') a sh:SPARQLConstraint ;" },
+        
+        { "role": "system", "content": "8. Include the following fields (metadata):" },
+        { "role": "system", "content": "- era:affectedClass (from domain)" },
+        { "role": "system", "content": "- era:affectedProperty (the actual property)" },
+        { "role": "system", "content": "- era:rinfIndex (only if present)" },
+        { "role": "system", "content": "- era:scope (usually 'local')" },
+        { "role": "system", "content": "- rdfs:comment (if available)" },
+        { "role": "system", "content": "- sh:message" },
+        { "role": "system", "content": "- sh:path" },
+        { "role": "system", "content": "- sh:severity (default 'Violation')" },
+        { "role": "system", "content": "9. For PropertyShapes, always include **at least** one constraint triple (e.g., sh:maxCount, sh:nodeKind sh:IRI, sh:class, sh:minCount, sh:datatype, sh:pattern, sh:select (**mandatory for applicability shapes**), etc.). Never return shapes with metadata only." },
+        { "role": "system", "content": "10. For SPARQLConstraints, always include sh:select." },
+        
+        { "role": "system", "content": "## DO NOTs" },
+        { "role": "system", "content": "- DO NOT invent or guess constraints." },
+        { "role": "system", "content": "- DO NOT require a table to generate constraints — use it as a strong signal, not a requirement." },
+        { "role": "system", "content": "- DO NOT include any explanation, prefix declarations, or placeholders." },
+        { "role": "system", "content": "- DO NOT output anything if no constraint is found. In that case, return: 'SHACL shapes not found'." },
+        
+        { "role": "user", "content": "Generate SHACL restrictions for the following property: {entity}. Only do so if the Ontology or RAG clearly support constraints. If not, return the following string: 'SHACL shapes not found'." },
+        { "role": "user", "content": "## Ontology:" },
+        { "role": "user", "content": "{ontology_info}" },
+        { "role": "user", "content": "## RAG:" },
+        { "role": "user", "content": "{rag}" },
+        { "role": "user", "content": "## 20 previous SHACL shapes:" },
+        { "role": "user", "content": "{shacl_history}" }
+    ],
+    "generator_agent_property_with_error": [
+        { "role": "system", "content": "You are an expert in generating SHACL restrictions for ObjectProperties and DataTypeProperties, using Ontology, RAG tables, and previous SHACL shapes. You must only generate constraints if evidence is explicit or strongly indicated." },
+
+        { "role": "system", "content": "## DECISION PROCESS" },
+        { "role": "system", "content": "1. First, check whether **any constraints** exist for the property." },
+        { "role": "system", "content": "2. The presence of a RAG table with a matching era:rinfIndex is a strong indicator (sufficient condition) that at least a PropertyShape should be generated — but not a required one." },
+        { "role": "system", "content": "3. Even if no table is present, if the RAG or the Ontology defines constraints (e.g., sh:nodeKind, sh:maxCount, sh:class, etc.), a PropertyShape should be created." },
+        { "role": "system", "content": "4. If neither RAG nor Ontology provide any constraint, return exactly: 'SHACL shapes not found'." },
+        
+        { "role": "system", "content": "5. Applicability constraints (SPARQLConstraint) should only be generated if the RAG includes rules that relate the ':applicable' status of the property to the presence or values of other properties (e.g., 'Explanation on applicability: Applicable only when..." },
+        
+        { "role": "system", "content": "## STRUCTURE" },
+        { "role": "system", "content": "6. PropertyShape must begin with: era-sh:(PropertyName) a sh:PropertyShape ;" },
+        { "role": "system", "content": "7. SPARQLConstraint (if needed) must begin with: era-sh:(PropertyName+'Applicability') a sh:SPARQLConstraint ;" },
+        
+        { "role": "system", "content": "8. Include the following fields (metadata):" },
+        { "role": "system", "content": "- era:affectedClass (from domain)" },
+        { "role": "system", "content": "- era:affectedProperty (the actual property)" },
+        { "role": "system", "content": "- era:rinfIndex (only if present)" },
+        { "role": "system", "content": "- era:scope (usually 'local')" },
+        { "role": "system", "content": "- rdfs:comment (if available)" },
+        { "role": "system", "content": "- sh:message" },
+        { "role": "system", "content": "- sh:path" },
+        { "role": "system", "content": "- sh:severity (default 'Violation')" },
+        { "role": "system", "content": "9. For PropertyShapes, always include **at least** one constraint triple (e.g., sh:maxCount, sh:nodeKind sh:IRI, sh:class, sh:minCount, sh:datatype, sh:pattern, sh:select (**mandatory for applicability shapes**), etc.). Never return shapes with metadata only." },
+        { "role": "system", "content": "10. For SPARQLConstraints, always include sh:select." },
+        
+        { "role": "system", "content": "## DO NOTs" },
+        { "role": "system", "content": "- DO NOT invent or guess constraints." },
+        { "role": "system", "content": "- DO NOT require a table to generate constraints — use it as a strong signal, not a requirement." },
+        { "role": "system", "content": "- DO NOT include any explanation, prefix declarations, or placeholders." },
+        { "role": "system", "content": "- DO NOT output anything if no constraint is found. In that case, return: 'SHACL shapes not found'." },
+        
+        { "role": "user", "content": "Generate SHACL restrictions for the following property: {entity}. Only do so if the Ontology or RAG clearly support constraints. If not, return the following string: 'SHACL shapes not found'." },
+        { "role": "user", "content": "The last generated this SHACL constraint contained the following error: {error}. Try to prevent this error from occurring." },
+        { "role": "user", "content": "## Ontology:" },
+        { "role": "user", "content": "{ontology_info}" },
+        { "role": "user", "content": "## RAG:" },
+        { "role": "user", "content": "{rag}" },
+        { "role": "user", "content": "## 20 previous SHACL shapes:" },
+        { "role": "user", "content": "{shacl_history}" }
+    ]
+      
+}

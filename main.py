@@ -1,30 +1,62 @@
-from rag import split_pdf, summarize, embedding
+import argparse
+from rdflib import Graph
 
-# For printing images
-import base64
-import io
-from PIL import Image
+from rag import load_retriever
+from multiagent import run_shacl_generation
+from auxiliary_ontology_functions import process_shacl
+from ollama_functions import start_ollama
+
+import os
+import re
 
 
 if __name__ == "__main__":
-    file = "./content/rinf_application_guide_for_register_en_0_test.pdf"
-    texts, tables, table_chunks, images = split_pdf(file)
-    text_summaries, table_summaries, image_summaries = summarize(texts, tables, table_chunks, images)
 
-    retriever = embedding(texts, text_summaries, tables, table_summaries, images, image_summaries)
+    parser = argparse.ArgumentParser(description="Extract SHACL constraints from a PDF or TXT file.")
 
-    docs = retriever.invoke("What's an Operational Point? What types of OP exist?")
+    parser.add_argument("file", help="Path to the text file to be processed.")
+    parser.add_argument("--force_process", action="store_true", help="Force reprocessing of the PDF even if it was processed previously.")
+    parser.add_argument(
+        "--model",
+        type=str,
+        choices=["llama", "gpt"],
+        default="llama",
+        help="LLM model to use (options: llama, gpt)."
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0,
+        help="Temperature setting for the LLM (default: 0)."
+    )
+    parser.add_argument(
+        "--prompting_technique",
+        type=str,
+        choices=["v1", "basic", "few-shot", "cot", "grounded-citing", "all"],
+        default="basic",
+        help="Prompting technique to use (options: basic, few-shot, cot, grounded-citing, all)."
+    )
 
-    for doc in docs:
-        try:
-            # Try to decode as base64
-            decoded_bytes = base64.b64decode(doc)
-            
-            # Try to open as an image
-            image = Image.open(io.BytesIO(decoded_bytes))
-            image.show()
-        except Exception:
-            # If it fails, print as normal text
-            print(doc)
-        
-        print("\n\n" + "-" * 80)
+
+    args = parser.parse_args()
+
+    # Start ollama if the model is open-source
+    if not args.model=="gpt":
+        start_ollama()
+
+    # Load the graph
+    g = Graph()
+    g.parse("ontology.ttl", format="turtle")
+
+    # Load and summarize the PDF document
+    retriever = load_retriever(args.file, args.model, args.temperature, args.force_process)
+
+    shacl_constraints = run_shacl_generation(g, retriever, args.model, args.temperature, args.prompting_technique)
+
+    output_file = os.path.splitext(os.path.basename(args.file))[0]
+    output_file = re.sub(r'[^a-z0-9-]', '-', output_file.lower())
+    output_file = f"output/{output_file}_{args.model}_{args.temperature:.2f}_{args.prompting_technique}.ttl"
+
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    process_shacl(shacl_constraints, output_file)
